@@ -1,0 +1,10 @@
+# pyproject.toml
+[project]
+name="knowledge-pipeline"
+version="1.0.0"
+requires-python = ">=3.11,<3.12"
+description="Конвейер преобразования данных для баз знаний"
+authors = ["Михаил Ляхов neuspeed@inbox.ru"]
+license = "MIT"
+readme = "README.md"
+dependencies = []

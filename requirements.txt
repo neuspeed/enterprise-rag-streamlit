@@ -1,0 +1,16 @@
+requests
+aiohttp
+aio_pika
+aiofiles
+pydantic
+pydantic_settings
+pandas
+openpyxl
+bs4
+lxml
+openai
+pdf2image
+chardet
+structlog
+spacy
+backoff

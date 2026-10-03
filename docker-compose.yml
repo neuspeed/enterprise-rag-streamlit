@@ -1,0 +1,10 @@
+services:
+  app:
+    # Вместо сборки на боевых серверах всех питоновских зависимостей, используем образ, который собираем на сервере гитлаба
+    image: gitlab.infercom.one:5050/infercom-dev/llm-chains/knowledge-pipeline:${TAG:-dev}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Файлы, которые будут примонтированы вовнутрь
+      - ./config/.env:/app/.env
+      - ./logs:/app/logs

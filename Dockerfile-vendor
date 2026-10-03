@@ -1,0 +1,16 @@
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    wget \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# Копируем только requirements сначала для кеширования
+COPY requirements.txt .
+
+# Устанавливаем Python зависимости
+RUN pip install --no-cache-dir -r requirements.txt
