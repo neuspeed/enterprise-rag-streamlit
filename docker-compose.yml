@@ -1,10 +1,179 @@
+# Local development stack: one worker plus the broker it consumes from.
+#
+# Variable names here must match know_everything_ai/settings.py exactly. They
+# used to be RMQ_HOST / EMBEDDER_* while Settings read MQ_HOST / EMBEDDING_*,
+# so the worker started with an empty broker address and an unset transport and
+# sat idle looking healthy.
+
 services:
-  app:
-    # Вместо сборки на боевых серверах всех питоновских зависимостей, используем образ, который собираем на сервере гитлаба
-    image: gitlab.infercom.one:5050/infercom-dev/llm-chains/knowledge-pipeline:${TAG:-dev}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Own store: pgvector holds both the registry and the embeddings, so a
+  # knowledge base stays answerable after the job that produced it is gone.
+  # pgvector/pg16 carries the `vector` extension the migrations need; stock
+  # postgres would fail on CREATE EXTENSION.
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kb_postgres
+    environment:
+      POSTGRES_USER: ${VECTOR_STORE_USER:-postgres}
+      POSTGRES_DB: ${VECTOR_STORE_DATABASE:-vector_db}
+      # Local stack: trust instead of a password. VECTOR_STORE_CREDENTIAL
+      # defaults to empty and an empty password is dropped from the DSN, so a
+      # set password would strand every client on a failed auth.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "${VECTOR_STORE_PORT:-5432}:5432"
     volumes:
-      # Файлы, которые будут примонтированы вовнутрь
-      - ./config/.env:/app/.env
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  pipeline_worker:
+    build: .
+    container_name: kb_pipeline_worker
+    # No "main()" indirection: the package __main__ is the entrypoint.
+    command: python -m know_everything_ai
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # Transport. "postgres" has no worker in this stack, so it is opt-in.
+      INGEST_TRANSPORT: rabbitmq
+
+      MQ_HOST: rabbitmq
+      MQ_PORT: 5672
+      MQ_USER: ${MQ_USER:-guest}
+      MQ_PASS: ${MQ_PASS:-guest}
+      MQ_VIRTUAL_HOST: ${MQ_VIRTUAL_HOST:-/}
+      # Without at least one client the dispatcher declares no queues and
+      # consumes nothing while still reporting healthy. The value must be
+      # valid JSON *without* surrounding shell quotes: quoting it here made the
+      # literal apostrophes part of the string and Settings failed to parse it.
+      CLIENT_WEIGHTS: ${CLIENT_WEIGHTS:-{"acme":4}}
+
+      ENRICHER_API_URL: ${ENRICHER_API_URL:-}
+      ENRICHER_API_KEY: ${ENRICHER_API_KEY:-}
+      ENRICHER_MODEL_NAME: ${ENRICHER_MODEL_NAME:-}
+      CLASSIFIER_API_URL: ${CLASSIFIER_API_URL:-}
+      CLASSIFIER_API_KEY: ${CLASSIFIER_API_KEY:-}
+      CLASSIFIER_MODEL_NAME: ${CLASSIFIER_MODEL_NAME:-}
+      VLM_API_URL: ${VLM_API_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL_NAME: ${VLM_MODEL_NAME:-}
+      EMBEDDING_API_URL: ${EMBEDDING_API_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_CREDENTIAL: ${EMBEDDING_CREDENTIAL:-}
+
+      # Own store. The worker migrates it on startup, so a fresh volume comes
+      # up ready rather than needing a manual command first.
+      VECTOR_STORE_HOST: postgres
+      VECTOR_STORE_PORT: 5432
+      VECTOR_STORE_USER: ${VECTOR_STORE_USER:-postgres}
+      VECTOR_STORE_DATABASE: ${VECTOR_STORE_DATABASE:-vector_db}
+      VECTOR_STORE_CREDENTIAL: ${VECTOR_STORE_CREDENTIAL:-}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-}
+      LOCAL_EMBEDDING_DIM: ${LOCAL_EMBEDDING_DIM:-384}
+      LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-32}
+      # Mounted so a rebuild does not re-download the weights. `down -v` drops
+      # them, which is the intended meaning of that command.
+      FASTEMBED_CACHE_DIR: /app/.cache/fastembed
+
+      FLOWISE_ENABLED: ${FLOWISE_ENABLED:-false}
+      FLOWISE_API_URL: ${FLOWISE_API_URL:-}
+      FLOWISE_API_KEY: ${FLOWISE_API_KEY:-}
+
+      # Local files are refused unless explicitly enabled: a knowledge base
+      # upload must not be able to read the worker's filesystem.
+      ALLOW_LOCAL_SOURCES: ${ALLOW_LOCAL_SOURCES:-false}
+    volumes:
+      - ./data:/app/data
       - ./logs:/app/logs
+      - fastembed_cache:/app/.cache/fastembed
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Read-only query API: retrieves and cites fragments, never answers. It reads
+  # the same store config as the worker over the same migrated schema, and it
+  # deliberately gets no broker credentials and none of the worker's model
+  # URLs — the two are built from different image stages precisely so a read
+  # replica cannot shape what gets written.
+  query_api:
+    build:
+      context: .
+      target: api
+    container_name: kb_query_api
+    command: python -m know_everything_ai api
+    ports:
+      - "${QUERY_API_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      VECTOR_STORE_HOST: postgres
+      VECTOR_STORE_PORT: 5432
+      VECTOR_STORE_USER: ${VECTOR_STORE_USER:-postgres}
+      VECTOR_STORE_DATABASE: ${VECTOR_STORE_DATABASE:-vector_db}
+      VECTOR_STORE_CREDENTIAL: ${VECTOR_STORE_CREDENTIAL:-}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-}
+      LOCAL_EMBEDDING_DIM: ${LOCAL_EMBEDDING_DIM:-384}
+      LOCAL_EMBEDDING_BATCH_SIZE: ${LOCAL_EMBEDDING_BATCH_SIZE:-32}
+      # Mounted so a rebuild does not re-download the weights, same volume the
+      # worker writes through while embedding chunks.
+      FASTEMBED_CACHE_DIR: /app/.cache/fastembed
+
+      QUERY_API_HOST: 0.0.0.0
+      QUERY_API_PORT: 8000
+      QUERY_MAX_LIMIT: ${QUERY_MAX_LIMIT:-50}
+      QUERY_MIN_SCORE: ${QUERY_MIN_SCORE:--1.0}
+      QUERY_API_KEY_CACHE_SECONDS: ${QUERY_API_KEY_CACHE_SECONDS:-30}
+
+      # Agent role. Optional — retrieval works without it and /chat answers 503
+      # until the buyer wires a model. Listed explicitly here (rather than only
+      # in env_file) so a deployment can see at a glance what a read replica is
+      # allowed to spend on answering.
+      ANSWER_API_URL: ${ANSWER_API_URL:-}
+      ANSWER_API_KEY: ${ANSWER_API_KEY:-}
+      ANSWER_MODEL_NAME: ${ANSWER_MODEL_NAME:-glm-5.3-flash}
+      ANSWER_TIMEOUT: ${ANSWER_TIMEOUT:-120}
+      ANSWER_MAX_TOKENS: ${ANSWER_MAX_TOKENS:-1200}
+      ANSWER_TEMPERATURE: ${ANSWER_TEMPERATURE:-0.2}
+      ANSWER_MAX_FRAGMENTS: ${ANSWER_MAX_FRAGMENTS:-6}
+      ANSWER_FALLBACK_API_URL: ${ANSWER_FALLBACK_API_URL:-}
+      ANSWER_FALLBACK_API_KEY: ${ANSWER_FALLBACK_API_KEY:-}
+      ANSWER_FALLBACK_MODEL_NAME: ${ANSWER_FALLBACK_MODEL_NAME:-}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - fastembed_cache:/app/.cache/fastembed
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  fastembed_cache:

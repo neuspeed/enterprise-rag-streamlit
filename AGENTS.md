@@ -53,7 +53,7 @@ class RawElement(BaseModel):
 class PipelineMessage(BaseModel):
     kb_external_id: str
     kb_type: str = "auto"  # auto, force_small, force_large
-    files: Optional[List[str]] = None  # Cloud storage URLs from cloud.infercom.one
+    files: Optional[List[str]] = None  # Source URLs from the buyer's own storage
     html: Optional[List[str]] = None
     text: Optional[str] = None
 ```
@@ -63,7 +63,7 @@ class PipelineMessage(BaseModel):
 ## 4. Pipeline Execution Modules & Logic
 
 ### 4.1 Loaders & Parsers (`app/loaders/`, `app/cleaners/`)
-* **Loaders**: Create an abstract `BaseLoader`. Implement support for downloading files (`.pdf`, `.docx`, `.xlsx`, `.csv`, `.txt`, `.html`) from `cloud.infercom.one`.
+* **Loaders**: Create an abstract `BaseLoader`. Implement support for downloading files (`.pdf`, `.docx`, `.xlsx`, `.csv`, `.txt`, `.html`) from the configured WebDAV mount or any public URL.
 * **Cleaners & Parsers**: Extract raw data and normalize it into strict **Markdown** format with initial metadata (`RawElement`).
   * **PDF Parsing**: Implement parsing via a local **Gemma-4** model instance (mock or implement an actual LLM inference call as configured in `config.py`).
   * **HTML/Text Cleaners**: Strip technical noise (tags, CSS, wrappers) and keep core layout/tables intact.

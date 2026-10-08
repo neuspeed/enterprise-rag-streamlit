@@ -1,0 +1,90 @@
+# Local stand: adds the webhook sink the worker posts its result to.
+#
+# Kept out of docker-compose.yml on purpose — the shipped stack has no dev-only
+# services in it. Use it with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.stand.yml up -d
+#
+# The sink listens on port 80 so the demo payload reads http://webhook_sink/hook;
+# a port would also validate, it just reads worse in a client demo.
+
+services:
+  webhook_sink:
+    build: .
+    container_name: kb_webhook_sink
+    command: python tools/webhook_sink.py --port 80 --out /app/logs/webhook
+    volumes:
+      - ./tools:/app/tools:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Serves ./data so a payload can point at an http:// source the worker will
+  # actually download. The real product fetches the buyer's storage instead;
+  # this only stands in for it locally.
+  files:
+    build: .
+    container_name: kb_stand_files
+    command: python -m http.server 80 --directory /app/data --bind 0.0.0.0
+    volumes:
+      - ./data:/app/data:ro
+
+  # Local models, used as the *fallback* provider: no quota, no per-token cost,
+  # and it keeps answering when the paid one is rate-limited. Reached from the
+  # worker as http://ollama:11434/v1 — both services share the compose network.
+  #
+  # Models are not baked into the image; pull them once with
+  #   docker compose -f docker-compose.yml -f docker-compose.stand.yml \
+  #     exec ollama ollama pull qwen3:4b
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kb_stand_ollama
+    # Required for other containers: Ollama inside a container otherwise binds
+    # 127.0.0.1 and is unreachable from the compose network.
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Docker Desktop here has ~7.6 GB across every service. Holding a 3 GB
+      # model resident starves rabbitmq and the worker, so unload when idle and
+      # keep exactly one model loaded.
+      OLLAMA_KEEP_ALIVE: 10m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Sandbox dashboard from know_everything_ai/ui/app.py. Talks to the pipeline
+  # directly instead of through RabbitMQ. Built from the `ui` stage of the
+  # Dockerfile, which is the only image that carries streamlit.
+  ui:
+    build:
+      context: .
+      target: ui
+    container_name: kb_stand_ui
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # .env has no VECTOR_STORE_HOST (worker/query_api set it in the base
+      # compose); without it the UI would look for Postgres on localhost inside
+      # this container and every list/chat call would fail.
+      VECTOR_STORE_HOST: postgres
+    volumes:
+      - ./know_everything_ai:/app/know_everything_ai
+      - ./data:/app/data
+    depends_on:
+      - files
+
+volumes:
+  ollama_models:

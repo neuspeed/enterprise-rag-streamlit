@@ -1,16 +1,32 @@
-requests
+# Runtime dependencies for the worker container.
+#
+# Kept in sync with the [project.dependencies] table in pyproject.toml. This file
+# exists because the Dockerfile installs it directly; if you change one, change
+# both. Dev tooling (pytest, ruff, mypy) lives in the `dev` extra instead of
+# shipping inside the production image.
+
+aiofiles
 aiohttp
 aio_pika
-aiofiles
-pydantic
-pydantic_settings
-pandas
-openpyxl
-bs4
+aiormq
+backoff
+beautifulsoup4
+chardet
+httpx
 lxml
 openai
+openpyxl
+pandas
 pdf2image
-chardet
+pydantic
+pydantic-settings
+python-docx
 structlog
-spacy
-backoff
+tiktoken
+yarl
+# Vector store (pgvector) and local embeddings. Both are on the ingest path:
+# the vector branch embeds chunks as it writes them, so they cannot be an extra.
+fastembed
+pgvector
+psycopg[binary]
+psycopg_pool

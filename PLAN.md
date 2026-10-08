@@ -12,6 +12,20 @@ The buyer never chooses a chunking strategy. The service branches on measured si
 
 ## 1. Locked decisions
 
+### Naming
+
+| Thing | Value |
+|---|---|
+| Product | **know-everything-ai** |
+| Distribution (PyPI) | `know-everything-ai` |
+| Python package | `know_everything_ai` |
+| CLI | `know-everything-ai serve` / `worker` / `migrate` |
+| Docker image / compose service | `know-everything-ai` |
+| Flowise document store | `kb_<kb_external_id>` (unchanged contract) |
+| API keys | `Authorization: Bearer <key>` |
+
+### Product decisions
+
 | Area | Decision |
 |---|---|
 | Product form | Self-hosted `docker compose up`. Small B2B buyer, single-tenant-friendly. |
@@ -38,11 +52,11 @@ These are verified on the critical path — each crashes or stalls a real job.
 
 | # | Defect | Location |
 |---|---|---|
-| B1 | `DocCategory.DOCUMENT_CHUNK` does not exist (member is `DOCUMENT`) → `AttributeError` on any markdown code block | `kb_pipeline/utils/markdown_to_raw_elements.py` |
-| B2 | `backoff` with no `max_tries` + sync `requests` inside the event loop → infinite retry stalls every in-flight message | `kb_pipeline/utils/webhook_utils.py` |
-| B3 | `headers` unbound when `api_key` is empty → `UnboundLocalError` | `kb_pipeline/flowise/client.py`, `kb_pipeline/flowise/resources/document_store.py` |
-| B4 | `element` used before assignment → duplicate `RawElement`s for every paragraph nested in a docx table | `kb_pipeline/parsers/word_parser.py` |
-| B5 | `print(e); return None` swallows all HTML load failures; `__init__` never calls `super()`, so `self.owncloud_client` never exists | `kb_pipeline/loaders/html_loader.py` |
+| B1 | `DocCategory.DOCUMENT_CHUNK` does not exist (member is `DOCUMENT`) → `AttributeError` on any markdown code block | `know_everything_ai/utils/markdown_to_raw_elements.py` |
+| B2 | `backoff` with no `max_tries` + sync `requests` inside the event loop → infinite retry stalls every in-flight message | `know_everything_ai/utils/webhook_utils.py` |
+| B3 | `headers` unbound when `api_key` is empty → `UnboundLocalError` | `know_everything_ai/flowise/client.py`, `know_everything_ai/flowise/resources/document_store.py` |
+| B4 | `element` used before assignment → duplicate `RawElement`s for every paragraph nested in a docx table | `know_everything_ai/parsers/word_parser.py` |
+| B5 | `print(e); return None` swallows all HTML load failures; `__init__` never calls `super()`, so `self.owncloud_client` never exists | `know_everything_ai/loaders/html_loader.py` |
 
 Also addressed in P0:
 
@@ -81,7 +95,7 @@ Flat imports (`from settings import Settings`) are why 4 of 5 test files cannot 
 collected. The restructure is a product prerequisite, not cosmetics.
 
 ```
-kb_pipeline/                 # renamed from app/ — installable, absolute imports
+know_everything_ai/                 # renamed from app/ — installable, absolute imports
 ├── settings.py              # pydantic-settings, nested groups, no secret defaults
 ├── schemas.py               # RawElement, DocCategory, Payload, JobResult
 ├── loaders/ parsers/ cleaners/ splitters/ classifier/ structurizers/ enricher/
@@ -119,7 +133,7 @@ that do not exist), `tests/test_chunk_classifier.py` and `tests/test_knowledge_c
 nothing, full test suite green.**
 
 - `git init` + baseline commit **before** restructuring — a botched refactor must be revertable.
-- `app/` → `kb_pipeline/` as an installable package; flat → absolute imports; add missing `__init__.py`.
+- `app/` → `know_everything_ai/` as an installable package; flat → absolute imports; add missing `__init__.py`.
 - pytest config + `pytest-asyncio` + real `conftest.py`; repair the two green suites.
 - Fix B1–B5; move blocking parsers to `asyncio.to_thread`; one shared `httpx.AsyncClient` and
   pipeline per worker instead of per message.
